@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="uz">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Admin panel</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+:root{--deep:#122318;--bark:#5a3a1c;--gold:#e8c46a;--cream:#f3e7c8}
+*{box-sizing:border-box}
+body{margin:0;background:var(--deep);color:var(--cream);font-family:system-ui,-apple-system,sans-serif;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+#app{max-width:560px;margin:0 auto;padding:14px 16px 40px}
+h1{font-family:Georgia,serif;font-size:26px;margin:6px 0 14px}
+h2{font-family:Georgia,serif;font-size:19px;margin:22px 0 8px;color:var(--gold)}
+.card{background:#00000045;border:1px solid #b98a4577;border-radius:12px;padding:12px;margin-bottom:8px}
+.stats{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.stats b{display:block;font:700 24px Georgia,serif;color:var(--gold)}
+label{display:block;font-size:13px;opacity:.8;margin-top:8px}
+input,textarea{width:100%;background:#0006;border:1.5px solid #b98a45;color:var(--cream);border-radius:8px;padding:10px;font-size:15px;margin-top:4px}
+textarea{min-height:120px;font-family:ui-monospace,monospace;font-size:13px}
+.chk{display:flex;gap:8px;align-items:center;margin-top:8px;font-size:14px}
+.chk input{width:auto;margin:0}
+.btn{background:linear-gradient(#f0d27a,#d0a23c);color:#3b2608;border:0;border-radius:8px;padding:10px 14px;font-weight:700;cursor:pointer;margin-top:10px}
+.btn.red{background:#b34a3c;color:#fff}.btn.sm{padding:7px 10px;margin:0}
+.row{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.muted{font-size:13px;opacity:.7}
+button:focus-visible,input:focus-visible,textarea:focus-visible{outline:3px solid var(--gold)}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+const tg = window.Telegram.WebApp; tg.ready(); tg.expand();
+const root = document.getElementById('app');
+
+function h(tag, attrs = {}, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (v == null || v === false) continue;
+    if (k === 'class') e.className = v;
+    else if (k.startsWith('on')) e.addEventListener(k.slice(2), v);
+    else e.setAttribute(k, v);
+  }
+  for (const c of kids.flat()) if (c !== false && c != null) e.append(c.nodeType ? c : document.createTextNode(c));
+  return e;
+}
+async function api(path, body, method) {
+  const r = await fetch('/api/admin' + path, {
+    method: method || (body ? 'POST' : 'GET'),
+    headers: { 'Content-Type': 'application/json', 'x-init': tg.initData },
+    body: body ? JSON.stringify(body) : undefined
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || 'Xatolik');
+  return j;
+}
+const act = fn => async () => { try { await fn(); await render(); } catch (e) { tg.showAlert(e.message); } };
+const field = (label, el) => h('label', {}, label, el);
+
+async function render() {
+  let st, se, ch, wd, ad;
+  try { [st, se, ch, wd, ad] = await Promise.all([api('/stats'), api('/settings'), api('/channels'), api('/withdrawals'), api('/admins')]); }
+  catch (e) { root.replaceChildren(h('h1', {}, 'Ruxsat yo\'q'), h('p', { class: 'muted' }, e.message)); return; }
+
+  /* Sozlamalar */
+  const sIn = {};
+  for (const k of ['coins_per_star', 'min_stars', 'ref_bonus', 'ref_percent']) sIn[k] = h('input', { type: 'number', step: 'any', value: se[k] });
+  const prizes = h('textarea', {}, JSON.stringify(JSON.parse(se.prizes), null, 2));
+
+  /* Yangi kanal */
+  const n = { chat: h('input', { placeholder: '@kanal_nomi' }), title: h('input', { placeholder: 'Ko\'rinadigan nom' }),
+    link: h('input', { placeholder: 'https://t.me/... (yopiq kanal bo\'lsa)' }), reward: h('input', { type: 'number', step: 'any', placeholder: '0.1, 1, 2' }),
+    daily: h('input', { type: 'checkbox' }), required: h('input', { type: 'checkbox' }) };
+  const adminId = h('input', { type: 'number', placeholder: 'Telegram ID' });
+
+  root.replaceChildren(
+    h('h1', {}, 'Admin panel'),
+    h('div', { class: 'stats' },
+      h('div', { class: 'card' }, h('b', {}, st.users), 'foydalanuvchi'),
+      h('div', { class: 'card' }, h('b', {}, st.coins), 'tanga (jami balans)'),
+      h('div', { class: 'card' }, h('b', {}, st.stars + ' ⭐'), 'tushgan Stars'),
+      h('div', { class: 'card' }, h('b', {}, st.pending), 'kutilayotgan so\'rov')),
+
+    h('h2', {}, 'Yechish so\'rovlari'),
+    wd.length ? wd.map(w => h('div', { class: 'card' },
+      h('b', {}, w.prize + ' · ' + w.coins + ' tanga'),
+      h('div', { class: 'muted' }, (w.name || '') + (w.username ? ' @' + w.username : '') + ' · ID ' + w.user),
+      h('div', { class: 'muted' }, 'Yuborish: ' + w.info),
+      h('div', { class: 'row', style: 'margin-top:8px;justify-content:flex-start' },
+        h('button', { class: 'btn sm', onclick: act(() => api('/withdrawals/' + w.id, { action: 'done' })) }, 'Bajarildi'),
+        h('button', { class: 'btn sm red', onclick: act(() => api('/withdrawals/' + w.id, { action: 'reject' })) }, 'Rad etish')))) : h('p', { class: 'muted' }, 'So\'rov yo\'q'),
+
+    h('h2', {}, 'Kanallar va vazifalar'),
+    ch.map(c => h('div', { class: 'card row' },
+      h('div', {}, h('b', {}, c.title), h('div', { class: 'muted' }, c.chat + ' · +' + c.reward + ' tanga' + (c.daily ? ' · kunlik' : '') + (c.required ? ' · majburiy' : ''))),
+      h('button', { class: 'btn sm red', onclick: act(() => api('/channels/' + c.id, null, 'DELETE')) }, 'O\'chirish'))),
+    h('div', { class: 'card' },
+      h('b', {}, 'Yangi kanal qo\'shish'),
+      h('p', { class: 'muted' }, 'Botni kanalga admin qiling, aks holda obunani tekshira olmaydi.'),
+      field('Kanal', n.chat), field('Nom', n.title), field('Havola (ixtiyoriy)', n.link), field('Mukofot (tanga)', n.reward),
+      h('label', { class: 'chk' }, n.daily, 'Kunlik vazifa (har kuni qayta olinadi)'),
+      h('label', { class: 'chk' }, n.required, 'Majburiy obuna (obunasiz app ochilmaydi)'),
+      h('button', { class: 'btn', onclick: act(() => api('/channels', {
+        chat: n.chat.value, title: n.title.value, link: n.link.value, reward: Number(n.reward.value || 0),
+        daily: n.daily.checked, required: n.required.checked })) }, 'Qo\'shish')),
+
+    h('h2', {}, 'Sozlamalar'),
+    h('div', { class: 'card' },
+      field('1 Stars = necha tanga', sIn.coins_per_star), field('Minimal Stars', sIn.min_stars),
+      field('Do\'st taklif bonusi (tanga)', sIn.ref_bonus), field('Referal depozitidan (%)', sIn.ref_percent),
+      field('Sovg\'alar (JSON: id, title, coins)', prizes),
+      h('button', { class: 'btn', onclick: act(() => api('/settings', {
+        coins_per_star: sIn.coins_per_star.value, min_stars: sIn.min_stars.value,
+        ref_bonus: sIn.ref_bonus.value, ref_percent: sIn.ref_percent.value, prizes: prizes.value })) }, 'Saqlash')),
+
+    h('h2', {}, 'Adminlar'),
+    ad.owners.map(id => h('div', { class: 'card muted' }, id + ' (asosiy)')),
+    ad.admins.map(id => h('div', { class: 'card row' }, h('span', {}, String(id)),
+      h('button', { class: 'btn sm red', onclick: act(() => api('/admins/' + id, null, 'DELETE')) }, 'O\'chirish'))),
+    h('div', { class: 'card' }, field('Yangi admin (Telegram ID)', adminId),
+      h('button', { class: 'btn', onclick: act(() => api('/admins', { id: Number(adminId.value) })) }, 'Admin qo\'shish'))
+  );
+}
+render();
+</script>
+</body>
+</html>
