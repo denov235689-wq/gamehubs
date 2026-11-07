@@ -54,6 +54,7 @@ async function api(path, body, method) {
   if (!r.ok) throw new Error(j.error || 'Xatolik');
   return j;
 }
+const put = (...n) => root.replaceChildren(...n.flat(3).filter(x => x !== false && x != null));
 const act = fn => async () => { try { await fn(); await render(); } catch (e) { tg.showAlert(e.message); } };
 const field = (label, el) => h('label', {}, label, el);
 
@@ -73,7 +74,7 @@ async function render() {
     daily: h('input', { type: 'checkbox' }), required: h('input', { type: 'checkbox' }) };
   const adminId = h('input', { type: 'number', placeholder: 'Telegram ID' });
 
-  root.replaceChildren(
+  put(
     h('h1', {}, 'Admin panel'),
     h('div', { class: 'stats' },
       h('div', { class: 'card' }, h('b', {}, st.users), 'foydalanuvchi'),
