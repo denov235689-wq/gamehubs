@@ -65,7 +65,8 @@ async function render() {
 
   /* Sozlamalar */
   const sIn = {};
-  for (const k of ['coins_per_star', 'min_stars', 'ref_bonus', 'ref_percent']) sIn[k] = h('input', { type: 'number', step: 'any', value: se[k] });
+  for (const k of ['coins_per_star', 'min_stars', 'ref_bonus', 'ref_percent', 'win_mult', 'bot_enabled', 'bot_depth', 'bot_wait']) sIn[k] = h('input', { type: 'number', step: 'any', value: se[k] });
+  sIn.stakes = h('input', { value: JSON.parse(se.stakes).join(', ') });
   const prizes = h('textarea', {}, JSON.stringify(JSON.parse(se.prizes), null, 2));
 
   /* Yangi kanal */
@@ -109,10 +110,15 @@ async function render() {
     h('div', { class: 'card' },
       field('1 Stars = necha tanga', sIn.coins_per_star), field('Minimal Stars', sIn.min_stars),
       field('Do\'st taklif bonusi (tanga)', sIn.ref_bonus), field('Referal depozitidan (%)', sIn.ref_percent),
+      field('Tikish variantlari (vergul bilan)', sIn.stakes), field('G\'olib ko\'paytma (masalan 1.8)', sIn.win_mult),
+      field('Bot bilan o\'ynash (1 = ha, 0 = yo\'q)', sIn.bot_enabled), field('Bot kuchi (1 oson ... 7 kuchli)', sIn.bot_depth),
+      field('Raqib kutish (soniya)', sIn.bot_wait),
       field('Sovg\'alar (JSON: id, title, coins)', prizes),
       h('button', { class: 'btn', onclick: act(() => api('/settings', {
         coins_per_star: sIn.coins_per_star.value, min_stars: sIn.min_stars.value,
-        ref_bonus: sIn.ref_bonus.value, ref_percent: sIn.ref_percent.value, prizes: prizes.value })) }, 'Saqlash')),
+        ref_bonus: sIn.ref_bonus.value, ref_percent: sIn.ref_percent.value, prizes: prizes.value,
+        stakes: sIn.stakes.value, win_mult: sIn.win_mult.value, bot_enabled: sIn.bot_enabled.value,
+        bot_depth: sIn.bot_depth.value, bot_wait: sIn.bot_wait.value })) }, 'Saqlash')),
 
     h('h2', {}, 'Adminlar'),
     ad.owners.map(id => h('div', { class: 'card muted' }, id + ' (asosiy)')),
