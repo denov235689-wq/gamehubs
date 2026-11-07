@@ -55,6 +55,7 @@ async function api(path, body, method) {
   return j;
 }
 const put = (...n) => root.replaceChildren(...n.flat(3).filter(x => x !== false && x != null));
+try { tg.BackButton.show(); tg.BackButton.onClick(() => { location.href = '/'; }); } catch (e) { /* eski Telegram */ }
 const act = fn => async () => { try { await fn(); await render(); } catch (e) { tg.showAlert(e.message); } };
 const field = (label, el) => h('label', {}, label, el);
 
@@ -75,13 +76,36 @@ async function render() {
     daily: h('input', { type: 'checkbox' }), required: h('input', { type: 'checkbox' }) };
   const adminId = h('input', { type: 'number', placeholder: 'Telegram ID' });
 
+  /* Balans berish */
+  const bq = h('input', { placeholder: 'Ism, @username yoki ID' }), bres = h('div', {});
+  const bid = h('input', { type: 'number', placeholder: 'Foydalanuvchi ID' });
+  const bamt = h('input', { type: 'number', step: 'any', placeholder: 'Miqdor (minus bo\'lsa yechiladi)' });
+  const search = async () => {
+    try {
+      const l = await api('/users?q=' + encodeURIComponent(bq.value));
+      bres.replaceChildren(...l.map(u => h('div', { class: 'card row' },
+        h('div', {}, h('b', {}, u.name), h('div', { class: 'muted' }, (u.username ? '@' + u.username + ' · ' : '') + 'ID ' + u.id + ' · ' + u.balance + ' tanga')),
+        h('button', { class: 'btn sm', onclick: () => { bid.value = u.id; } }, 'Tanlash'))));
+    } catch (e) { tg.showAlert(e.message); }
+  };
+
   put(
+    h('button', { class: 'btn sm', onclick: () => { location.href = '/'; } }, '← Asosiy menyu'),
     h('h1', {}, 'Admin panel'),
     h('div', { class: 'stats' },
       h('div', { class: 'card' }, h('b', {}, st.users), 'foydalanuvchi'),
       h('div', { class: 'card' }, h('b', {}, st.coins), 'tanga (jami balans)'),
       h('div', { class: 'card' }, h('b', {}, st.stars + ' ⭐'), 'tushgan Stars'),
       h('div', { class: 'card' }, h('b', {}, st.pending), 'kutilayotgan so\'rov')),
+
+    h('h2', {}, 'Balans berish'),
+    h('div', { class: 'card' },
+      field('Foydalanuvchini qidirish', bq), h('button', { class: 'btn sm', onclick: search }, 'Qidirish'), bres,
+      field('Foydalanuvchi ID', bid), field('Miqdor (tanga)', bamt),
+      h('button', { class: 'btn', onclick: act(async () => {
+        const r = await api('/balance', { id: Number(bid.value), amount: Number(bamt.value) });
+        tg.showAlert('Yangi balans: ' + r.balance + ' tanga');
+      }) }, 'Balans berish')),
 
     h('h2', {}, 'Yechish so\'rovlari'),
     wd.length ? wd.map(w => h('div', { class: 'card' },
