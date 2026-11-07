@@ -204,7 +204,7 @@ function home() {
         h('div', { class: 'bal' }, fmt(me.balance), svg('coin', 'coin')),
         h('button', { class: 'wood dep', onclick: deposit }, svg('dep', 'ic sm'), 'DEPOZIT'))),
     h('div', { class: 'mid' },
-      h('div', { class: 'col' }, mi('tasks', 'Vazifalar', tasks), mi('trophy', 'Reyting', top),
+      h('div', { class: 'col' }, mi('tasks', 'Vazifalar', tasks), mi('trophy', 'Reyting', leaderboard),
         me.isAdmin && mi('gear', 'Admin', () => { location.href = '/admin.html'; })),
       h('div', { class: 'col' }, mi('friends', 'Do\'st bilan', invite), mi('cash', 'Pul yechish', withdraw))),
     h('div', { class: 'games' }, game('', 'Shashka', true), game('♟️', 'Shaxmat', false), game('🎱', 'Bilyard', false), game('🃏', 'Durak', false)),
@@ -234,7 +234,7 @@ async function tasks() {
 }
 
 /* Reyting */
-async function top() {
+async function leaderboard() {
   show(sub('Reyting', h('p', { class: 'muted' }, 'Yuklanmoqda…')));
   const l = await api('/top');
   show(sub('Reyting', l.map((u, i) => h('div', { class: 'card row' },
