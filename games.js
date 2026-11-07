@@ -117,6 +117,36 @@ function botMove(b, side, depth) {
 }
 
 /* ---------- Server qismi ---------- */
+const { Chess } = require('chess.js');
+const { Game: ChessAI } = require('js-chess-engine');
+
+const CHESS_START = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+const KINDS = ['shashka', 'chess'];
+const sqIdx = sq => (8 - Number(sq[1])) * 8 + (sq.charCodeAt(0) - 97);
+const idxSq = i => String.fromCharCode(97 + (i & 7)) + (8 - (i >> 3));
+const startBoardStr = kind => kind === 'chess' ? CHESS_START : JSON.stringify(startBoard());
+
+function chessBoard(fen) {
+  const out = [];
+  for (const row of new Chess(fen).board()) for (const sq of row) out.push(sq ? sq.color + sq.type : null);
+  return out;
+}
+function chessLegal(fen) {
+  return new Chess(fen).moves({ verbose: true }).map(m => ({ f: sqIdx(m.from), t: sqIdx(m.to), p: m.promotion || null }));
+}
+function chessBotMove(fen, level) {
+  const legal = new Chess(fen).moves({ verbose: true });
+  if (!legal.length) return null;
+  try {
+    const r = new ChessAI(fen).aiMove(level);
+    const [from, to] = Object.entries(r)[0];
+    const m = legal.find(x => x.from === from.toLowerCase() && x.to === to.toLowerCase() && (!x.promotion || x.promotion === 'q'));
+    if (m) return { from: m.from, to: m.to, promotion: m.promotion };
+  } catch (e) { console.error('chess ai:', e.message); }
+  const m = legal[Math.floor(Math.random() * legal.length)];
+  return { from: m.from, to: m.to, promotion: m.promotion };
+}
+
 module.exports = function (app, X) {
   const { db, auth, wrap, C, F, add, getS, notify } = X;
   db.exec(`CREATE TABLE IF NOT EXISTS games(
@@ -124,12 +154,14 @@ module.exports = function (app, X) {
     status TEXT, board TEXT, turn INTEGER DEFAULT 1, cw INTEGER, cb INTEGER, tstart INTEGER,
     noprog INTEGER DEFAULT 0, hist TEXT DEFAULT '[]', result TEXT, reason TEXT, last TEXT,
     bot_at INTEGER DEFAULT 0, created INTEGER, updated INTEGER)`);
+  try { db.exec("ALTER TABLE games ADD COLUMN kind TEXT DEFAULT 'shashka'"); } catch (e) { /* allaqachon bor */ }
 
   const TOTAL = 6 * 60 * 1000; // har bir o'yinchiga 6 daqiqa
   const now = () => Date.now();
   const mult = () => Number(getS('win_mult')) || 1.8;
   const stakes = () => JSON.parse(getS('stakes')).map(Number);
   const depth = () => Math.min(7, Math.max(1, Math.floor(Number(getS('bot_depth')) || 4)));
+  const chessLevel = () => depth() <= 2 ? 1 : depth() <= 4 ? 2 : 3;
   const G = id => db.prepare('SELECT * FROM games WHERE id=?').get(id);
   const myActive = uid => db.prepare("SELECT * FROM games WHERE status IN ('wait','play') AND (w=? OR b=?) ORDER BY id DESC").get(uid, uid);
   const clocks = g => { const t = now() - g.tstart; return { w: g.turn === 1 ? g.cw - t : g.cw, b: g.turn === -1 ? g.cb - t : g.cb }; };
@@ -152,53 +184,85 @@ module.exports = function (app, X) {
     }
   }
 
+  /* Yurishni bazaga yozish (ikkala o'yin uchun umumiy) */
+  function commit(g, boardStr, side, clk, noprog, hist, last) {
+    const next = -side;
+    const nextIsBot = (next === 1 ? g.w : g.b) === 0;
+    db.prepare('UPDATE games SET board=?,turn=?,cw=?,cb=?,tstart=?,noprog=?,hist=?,last=?,bot_at=?,updated=? WHERE id=?')
+      .run(boardStr, next,
+        Math.max(1, side === 1 ? clk.w : g.cw), Math.max(1, side === -1 ? clk.b : g.cb),
+        now(), noprog, JSON.stringify(hist.slice(-200)), JSON.stringify(last),
+        nextIsBot ? now() + 800 + Math.floor(Math.random() * 1200) : 0, now(), g.id);
+  }
+
   function doMove(g, board, m, side, clk) {
     const nb = applyMove(board, m);
     const wasMan = Math.abs(board[m.path[0]]) === 1;
     const noprog = (m.caps.length || wasMan) ? 0 : g.noprog + 1;
-    const next = -side;
-    const key = nb.map(x => x + 2).join('') + next;
+    const key = nb.map(x => x + 2).join('') + (-side);
     const hist = JSON.parse(g.hist); hist.push(key);
-    const nextIsBot = (next === 1 ? g.w : g.b) === 0;
-    db.prepare('UPDATE games SET board=?,turn=?,cw=?,cb=?,tstart=?,noprog=?,hist=?,last=?,bot_at=?,updated=? WHERE id=?')
-      .run(JSON.stringify(nb), next,
-        Math.max(1, side === 1 ? clk.w : g.cw), Math.max(1, side === -1 ? clk.b : g.cb),
-        now(), noprog, JSON.stringify(hist.slice(-200)), JSON.stringify(m.path),
-        nextIsBot ? now() + 800 + Math.floor(Math.random() * 1200) : 0, now(), g.id);
-    if (!legalMoves(nb, next).length) return finish(g.id, side === 1 ? 'w' : 'b', 'no_moves');
+    commit(g, JSON.stringify(nb), side, clk, noprog, hist, m.path);
+    if (!legalMoves(nb, -side).length) return finish(g.id, side === 1 ? 'w' : 'b', 'no_moves');
     if (hist.filter(k => k === key).length >= 3) return finish(g.id, 'draw', 'repeat');
     if (noprog >= 60) return finish(g.id, 'draw', 'noprog');
   }
 
+  function doChessMove(g, mv, side, clk) {
+    const ch = new Chess(g.board);
+    let m;
+    try { m = ch.move({ from: mv.from, to: mv.to, promotion: mv.promotion }); } catch (e) { return false; }
+    const fen = ch.fen(), parts = fen.split(' '), key = parts.slice(0, 4).join(' ');
+    const half = Number(parts[4]) || 0;
+    const hist = JSON.parse(g.hist); hist.push(key);
+    commit(g, fen, side, clk, half, hist, [sqIdx(m.from), sqIdx(m.to)]);
+    if (ch.isCheckmate()) finish(g.id, side === 1 ? 'w' : 'b', 'checkmate');
+    else if (ch.isStalemate()) finish(g.id, 'draw', 'stalemate');
+    else if (ch.isInsufficientMaterial()) finish(g.id, 'draw', 'insufficient');
+    else if (half >= 100) finish(g.id, 'draw', 'fifty');
+    else if (hist.filter(k => k === key).length >= 3) finish(g.id, 'draw', 'repeat');
+    return true;
+  }
+
   function botStep(g) {
-    const board = JSON.parse(g.board), side = g.turn;
+    const side = g.turn;
+    if (g.kind === 'chess') {
+      const mv = chessBotMove(g.board, chessLevel());
+      if (!mv) return finish(g.id, side === 1 ? 'b' : 'w', 'no_moves');
+      return void doChessMove(g, mv, side, clocks(g));
+    }
+    const board = JSON.parse(g.board);
     const m = botMove(board, side, depth());
     if (!m) return finish(g.id, side === 1 ? 'b' : 'w', 'no_moves');
     doMove(g, board, m, side, clocks(g));
   }
 
+  /* Kutayotgan o'yinni bot bilan boshlash */
   function startBot(g) {
     const humanWhite = Math.random() < 0.5;
     db.prepare("UPDATE games SET w=?,b=?,bot=1,status='play',board=?,turn=1,cw=?,cb=?,tstart=?,bot_at=?,updated=? WHERE id=? AND status='wait'")
-      .run(humanWhite ? g.w : 0, humanWhite ? 0 : g.w, JSON.stringify(startBoard()), TOTAL, TOTAL, now(), humanWhite ? 0 : now() + 1200, now(), g.id);
+      .run(humanWhite ? g.w : 0, humanWhite ? 0 : g.w, startBoardStr(g.kind), TOTAL, TOTAL, now(), humanWhite ? 0 : now() + 1200, now(), g.id);
   }
 
   function view(g, uid) {
+    const kind = g.kind || 'shashka';
     const you = g.w === uid ? 1 : -1;
-    const board = g.board ? JSON.parse(g.board) : null;
     const oppId = you === 1 ? g.b : g.w;
     const out = {
-      id: g.id, status: g.status, stake: F(g.stake), payout: F(Math.round(g.stake * mult())),
-      you, turn: g.turn, result: g.result, reason: g.reason, board,
-      last: g.last ? JSON.parse(g.last) : null, bot: !!g.bot,
+      id: g.id, kind, status: g.status, stake: F(g.stake), payout: F(Math.round(g.stake * mult())),
+      you, turn: g.turn, result: g.result, reason: g.reason, bot: !!g.bot,
+      last: g.last ? JSON.parse(g.last) : null, waited: now() - g.created,
       me: nameOf(uid), opp: oppId == null ? null : { name: oppId === 0 ? 'Bot' : nameOf(oppId) },
       balance: F(db.prepare('SELECT balance FROM users WHERE id=?').get(uid).balance)
     };
+    if (g.board) out.board = kind === 'chess' ? chessBoard(g.board) : JSON.parse(g.board);
     if (g.status === 'play') {
       const c = clocks(g);
       out.clocks = { w: Math.max(0, c.w), b: Math.max(0, c.b) };
       out.moveMs = now() - g.tstart;
-      if (g.turn === you) out.legal = legalMoves(board, you).map(m => m.path);
+      if (kind === 'chess') {
+        out.check = new Chess(g.board).inCheck();
+        if (g.turn === you) out.legal = chessLegal(g.board);
+      } else if (g.turn === you) out.legal = legalMoves(out.board, you).map(m => m.path);
     }
     return out;
   }
@@ -213,22 +277,38 @@ module.exports = function (app, X) {
     const ex = myActive(req.uid);
     if (ex) return res.json({ id: ex.id });
     const stake = Number(req.body.stake);
+    const kind = KINDS.includes(req.body.kind) ? req.body.kind : 'shashka';
+    const vsBot = req.body.vs === 'bot';
     if (!stakes().includes(stake)) return res.status(400).json({ error: 'Tikish noto\'g\'ri' });
+    if (vsBot && getS('bot_enabled') !== '1') return res.status(400).json({ error: 'Bot bilan o\'ynash o\'chirilgan' });
     const cost = C(stake);
     const id = db.transaction(() => {
       const r = db.prepare('UPDATE users SET balance=balance-? WHERE id=? AND balance>=?').run(cost, req.uid, cost);
       if (!r.changes) return null;
-      const opp = db.prepare("SELECT * FROM games WHERE status='wait' AND stake=? AND w<>? ORDER BY id LIMIT 1").get(cost, req.uid);
-      if (opp) {
-        const swap = Math.random() < 0.5;
-        db.prepare("UPDATE games SET w=?,b=?,status='play',board=?,turn=1,cw=?,cb=?,tstart=?,updated=? WHERE id=? AND status='wait'")
-          .run(swap ? req.uid : opp.w, swap ? opp.w : req.uid, JSON.stringify(startBoard()), TOTAL, TOTAL, now(), now(), opp.id);
-        return opp.id;
+      if (!vsBot) {
+        const opp = db.prepare("SELECT * FROM games WHERE status='wait' AND stake=? AND kind=? AND w<>? ORDER BY id LIMIT 1").get(cost, kind, req.uid);
+        if (opp) {
+          const swap = Math.random() < 0.5;
+          db.prepare("UPDATE games SET w=?,b=?,status='play',board=?,turn=1,cw=?,cb=?,tstart=?,updated=? WHERE id=? AND status='wait'")
+            .run(swap ? req.uid : opp.w, swap ? opp.w : req.uid, startBoardStr(kind), TOTAL, TOTAL, now(), now(), opp.id);
+          return opp.id;
+        }
       }
-      return Number(db.prepare("INSERT INTO games(stake,w,status,created,updated) VALUES(?,?,'wait',?,?)").run(cost, req.uid, now(), now()).lastInsertRowid);
+      const nid = Number(db.prepare("INSERT INTO games(stake,w,status,kind,created,updated) VALUES(?,?,'wait',?,?,?)").run(cost, req.uid, kind, now(), now()).lastInsertRowid);
+      if (vsBot) startBot(G(nid));
+      return nid;
     })();
     if (id === null) return res.status(400).json({ error: 'Tanga yetmaydi' });
     res.json({ id });
+  }));
+
+  /* Raqib topilmasa: o'zim bot bilan o'ynayman */
+  app.post('/api/game/bot', auth, wrap((req, res) => {
+    if (getS('bot_enabled') !== '1') return res.status(400).json({ error: 'Bot bilan o\'ynash o\'chirilgan' });
+    const g = db.prepare("SELECT * FROM games WHERE status='wait' AND w=?").get(req.uid);
+    if (!g) return res.status(400).json({ error: 'Kutayotgan o\'yin yo\'q' });
+    startBot(g);
+    res.json({ id: g.id });
   }));
 
   app.post('/api/game/cancel', auth, wrap((req, res) => {
@@ -258,6 +338,15 @@ module.exports = function (app, X) {
     if (g.turn !== you) return res.status(400).json({ error: 'Navbat sizniki emas' });
     const c = clocks(g);
     if ((you === 1 ? c.w : c.b) <= 0) { finish(g.id, you === 1 ? 'b' : 'w', 'timeout'); return res.status(400).json({ error: 'Vaqt tugadi' }); }
+
+    if (g.kind === 'chess') {
+      const f = Number(req.body.from), t = Number(req.body.to);
+      if (!(f >= 0 && f < 64 && t >= 0 && t < 64)) return res.status(400).json({ error: 'Noto\'g\'ri yurish' });
+      const p = ['q', 'r', 'b', 'n'].includes(req.body.promotion) ? req.body.promotion : undefined;
+      if (!doChessMove(g, { from: idxSq(f), to: idxSq(t), promotion: p }, you, c)) return res.status(400).json({ error: 'Noto\'g\'ri yurish' });
+      return res.json({ ok: true });
+    }
+
     const board = JSON.parse(g.board);
     const path = (Array.isArray(req.body.path) ? req.body.path : []).map(Number);
     const m = legalMoves(board, you).find(x => x.path.length === path.length && x.path.every((v, i) => v === path[i]));
@@ -273,7 +362,7 @@ module.exports = function (app, X) {
     res.json({ ok: true });
   }));
 
-  /* Fon jarayoni: vaqt, bot yurishi, raqib topilmasa bot */
+  /* Fon jarayoni: vaqt, bot yurishi, eski kutish o'yinlarini qaytarish */
   setInterval(() => {
     try {
       const t = now();
@@ -283,16 +372,11 @@ module.exports = function (app, X) {
         else if (g.turn === -1 && c.b <= 0) finish(g.id, 'w', 'timeout');
         else if (g.bot_at && t >= g.bot_at && (g.turn === 1 ? g.w : g.b) === 0) botStep(g);
       }
-      const botOn = getS('bot_enabled') === '1';
-      const waitMs = (Number(getS('bot_wait')) || 8) * 1000;
-      for (const g of db.prepare("SELECT * FROM games WHERE status='wait'").all()) {
-        if (botOn && t - g.created >= waitMs) startBot(g);
-        else if (!botOn && t - g.created >= 180000) {
-          db.transaction(() => {
-            const r = db.prepare("UPDATE games SET status='done',result='cancel',updated=? WHERE id=? AND status='wait'").run(t, g.id);
-            if (r.changes) add(g.w, g.stake);
-          })();
-        }
+      for (const g of db.prepare("SELECT * FROM games WHERE status='wait' AND created<=?").all(t - 180000)) {
+        db.transaction(() => {
+          const r = db.prepare("UPDATE games SET status='done',result='cancel',updated=? WHERE id=? AND status='wait'").run(t, g.id);
+          if (r.changes) add(g.w, g.stake);
+        })();
       }
     } catch (e) { console.error('games loop:', e); }
   }, 700);
