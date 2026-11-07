@@ -25,6 +25,11 @@ const DEFAULTS = {
   min_stars: '10',
   ref_bonus: '5',        // do'st taklif qilganga tanga
   ref_percent: '10',     // referal depoziti %
+  stakes: '[1,5,20,100]',  // tikish variantlari (tanga)
+  win_mult: '1.8',         // g'olib tikishning necha baravarini oladi
+  bot_enabled: '1',        // raqib topilmasa bot bilan o'ynash
+  bot_depth: '4',          // bot kuchi (1-7)
+  bot_wait: '8',           // raqib kutish (soniya)
   prizes: JSON.stringify([
     { id: 'uc60', title: 'PUBG 60 UC', coins: 30 },
     { id: 'stars50', title: '50 Telegram Stars', coins: 25 },
@@ -126,6 +131,7 @@ app.get('/api/me', auth, wrap(async (req, res) => {
     refBonus: Number(getS('ref_bonus')), refPercent: Number(getS('ref_percent')),
     rate: Number(getS('coins_per_star')), minStars: Number(getS('min_stars')),
     prizes: JSON.parse(getS('prizes')),
+    stakes: JSON.parse(getS('stakes')), winMult: Number(getS('win_mult')),
     missing: await missingChannels(u.id)
   });
 }));
@@ -196,18 +202,22 @@ A.get('/stats', (req, res) => res.json({
   pending: db.prepare("SELECT COUNT(*) n FROM withdrawals WHERE status='new'").get().n
 }));
 
-A.get('/settings', (req, res) => res.json({
-  coins_per_star: getS('coins_per_star'), min_stars: getS('min_stars'),
-  ref_bonus: getS('ref_bonus'), ref_percent: getS('ref_percent'), prizes: getS('prizes')
-}));
+A.get('/settings', (req, res) => res.json(Object.fromEntries(
+  ['coins_per_star', 'min_stars', 'ref_bonus', 'ref_percent', 'prizes', 'stakes', 'win_mult', 'bot_enabled', 'bot_depth', 'bot_wait']
+    .map(k => [k, getS(k)]))));
 A.post('/settings', (req, res) => {
   const b = req.body;
-  for (const k of ['coins_per_star', 'min_stars', 'ref_bonus', 'ref_percent']) {
+  for (const k of ['coins_per_star', 'min_stars', 'ref_bonus', 'ref_percent', 'win_mult', 'bot_enabled', 'bot_depth', 'bot_wait']) {
     if (b[k] !== undefined) {
       const n = Number(b[k]);
       if (!isFinite(n) || n < 0) return res.status(400).json({ error: k + ' noto\'g\'ri' });
       setS(k, n);
     }
+  }
+  if (b.stakes !== undefined) {
+    const arr = String(b.stakes).split(',').map(s => Number(s.trim())).filter(n => n > 0);
+    if (!arr.length) return res.status(400).json({ error: 'Tikishlar noto\'g\'ri' });
+    setS('stakes', JSON.stringify(arr));
   }
   if (b.prizes !== undefined) {
     try {
@@ -266,6 +276,9 @@ A.delete('/admins/:id', (req, res) => {
   res.json({ ok: true });
 });
 app.use('/api/admin', A);
+
+/* ---------- Shashka o'yini ---------- */
+require('./games')(app, { db, auth, wrap, C, F, add, getS, notify });
 
 /* ---------- Bot (long polling) ---------- */
 async function onUpdate(u) {
