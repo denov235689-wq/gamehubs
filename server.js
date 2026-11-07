@@ -139,6 +139,10 @@ app.get('/api/tasks', auth, (req, res) => {
   })));
 });
 
+app.get('/api/top', auth, (req, res) => res.json(
+  db.prepare('SELECT id,name,balance FROM users ORDER BY balance DESC LIMIT 20').all()
+    .map(u => ({ id: u.id, name: u.name, balance: F(u.balance) }))));
+
 app.post('/api/tasks/claim', auth, wrap(async (req, res) => {
   const c = db.prepare('SELECT * FROM channels WHERE id=? AND active=1').get(Number(req.body.id));
   if (!c) return res.status(404).json({ error: 'Vazifa topilmadi' });
