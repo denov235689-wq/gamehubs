@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS claims(user INTEGER, channel INTEGER, day TEXT, PRIMA
 CREATE TABLE IF NOT EXISTS withdrawals(id INTEGER PRIMARY KEY AUTOINCREMENT, user INTEGER, prize TEXT, coins INTEGER, info TEXT, status TEXT DEFAULT 'new', created INTEGER);
 CREATE TABLE IF NOT EXISTS payments(charge TEXT PRIMARY KEY, user INTEGER, stars INTEGER, coins INTEGER, created INTEGER);
 CREATE TABLE IF NOT EXISTS settings(k TEXT PRIMARY KEY, v TEXT);
+CREATE TABLE IF NOT EXISTS adjustments(id INTEGER PRIMARY KEY AUTOINCREMENT, admin INTEGER, user INTEGER, amount INTEGER, created INTEGER);
 `);
 const DEFAULTS = {
   coins_per_star: '0.1', // 1 Stars = necha tanga
@@ -132,6 +133,7 @@ app.get('/api/me', auth, wrap(async (req, res) => {
     rate: Number(getS('coins_per_star')), minStars: Number(getS('min_stars')),
     prizes: JSON.parse(getS('prizes')),
     stakes: JSON.parse(getS('stakes')), winMult: Number(getS('win_mult')),
+    botEnabled: getS('bot_enabled') === '1', botWait: Number(getS('bot_wait')),
     missing: await missingChannels(u.id)
   });
 }));
@@ -261,6 +263,28 @@ A.post('/withdrawals/:id', (req, res) => {
     notify(w.user, `❌ So'rov rad etildi: ${w.prize}. Tangalar hisobingizga qaytarildi.`);
   }
   res.json({ ok: true });
+});
+
+A.get('/users', (req, res) => {
+  const q = String(req.query.q || '').trim().replace(/^@/, '');
+  const like = `%${q}%`;
+  const rows = !q
+    ? db.prepare('SELECT id,name,username,balance FROM users ORDER BY created DESC LIMIT 10').all()
+    : db.prepare('SELECT id,name,username,balance FROM users WHERE id=? OR name LIKE ? OR username LIKE ? LIMIT 10').all(Number(q) || 0, like, like);
+  res.json(rows.map(u => ({ ...u, balance: F(u.balance) })));
+});
+A.post('/balance', (req, res) => {
+  const id = Number(req.body.id), amt = C(req.body.amount);
+  if (!id || !amt) return res.status(400).json({ error: 'ID va miqdorni to\'g\'ri kiriting' });
+  const u = db.prepare('SELECT * FROM users WHERE id=?').get(id);
+  if (!u) return res.status(404).json({ error: 'Foydalanuvchi topilmadi (u botga /start bosgan bo\'lishi kerak)' });
+  if (u.balance + amt < 0) return res.status(400).json({ error: 'Balans manfiy bo\'lib qoladi' });
+  db.transaction(() => {
+    add(id, amt);
+    db.prepare('INSERT INTO adjustments(admin,user,amount,created) VALUES(?,?,?,?)').run(req.uid, id, amt, Date.now());
+  })();
+  notify(id, amt > 0 ? `💰 Hisobingizga +${F(amt)} tanga qo'shildi` : `Hisobingizdan ${F(-amt)} tanga yechildi`);
+  res.json({ ok: true, balance: F(u.balance + amt) });
 });
 
 A.get('/admins', (req, res) => res.json({ owners: OWNERS, admins: db.prepare('SELECT id FROM admins').all().map(r => r.id) }));
